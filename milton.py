@@ -1,5 +1,7 @@
 import asyncio
 import discord
+import os
+import youtube_dl
 from discord.ext import commands
 
 if not discord.opus.is_loaded():
@@ -238,4 +240,5 @@ bot.add_cog(Music(bot))
 async def on_ready():
     print('Logged in as:\n{0} (ID: {0.id})'.format(bot.user))
 
-bot.run('token')
+key = os.environ['MILTON_KEY']
+bot.run(key)
