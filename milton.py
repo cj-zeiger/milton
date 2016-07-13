@@ -1,7 +1,10 @@
 import asyncio
 import discord
+import logging
+import functools
 import os
 import youtube_dl
+from gmusicapi import Mobileclient
 from discord.ext import commands
 
 if not discord.opus.is_loaded():
@@ -12,6 +15,8 @@ if not discord.opus.is_loaded():
     # note that on windows this DLL is automatically provided for you
     discord.opus.load_opus('opus')
 
+logging.basicConfig(level=logging.INFO)
+
 class VoiceEntry:
     def __init__(self, message, player):
         self.requester = message.author
@@ -19,7 +24,7 @@ class VoiceEntry:
         self.player = player
 
     def __str__(self):
-        fmt = '*{0.title}* uploaded by {0.uploader} and requested by {1.display_name}'
+        fmt = '*{0.title}* requested by {1.display_name}'
         duration = self.player.duration
         if duration:
             fmt = fmt + ' [length: {0[0]}m {0[1]}s]'.format(divmod(duration, 60))
@@ -141,7 +146,10 @@ class Music:
                 return
 
         try:
-            player = await state.voice.create_ytdl_player(song, ytdl_options=opts, after=state.toggle_next)
+            if "http" in song:
+                player = await state.voice.create_ytdl_player(song, ytdl_options=opts, after=state.toggle_next)
+            else:
+                player = await self.create_gmusic_player(song, state)
         except Exception as e:
             fmt = 'An error occurred while processing this request: ```py\n{}: {}\n```'
             await self.bot.send_message(ctx.message.channel, fmt.format(type(e).__name__, e))
@@ -151,6 +159,34 @@ class Music:
             await self.bot.say('Enqueued ' + str(entry))
             await state.songs.put(entry)
 
+    async def create_gmusic_player(self, song, state):
+        loop = state.voice.loop
+        func = functools.partial(api.search,song,max_results=2)
+        result = await loop.run_in_executor(None, func)
+        print(result['song_hits'])
+        if result['song_hits'] == []:
+            raise Exception('Song not found')
+        #checking for explicit version
+        if (len(result['song_hits']) > 1) and (result['song_hits'][0]['track']['explicitType'] == '2') and (result['song_hits'][1]['track']['explicitType'] == '1') and (result['song_hits'][0]['track']['title'] == result['song_hits'][1]['track']['title']) and (result['song_hits'][0]['track']['albumArtist'] == result['song_hits'][1]['track']['albumArtist']):
+        	#found explicit version
+        	track = result['song_hits'][1]['track']
+        else:
+        	track = result['song_hits'][0]['track']
+
+        id = track['nid']
+        realname = track['title'] + ' - ' + track['artist']
+        func = functools.partial(api.get_stream_url,id)
+        url = await loop.run_in_executor(None, func)
+        if url is None:
+            raise Exception("error retrieving song url")
+
+        player = state.voice.create_ffmpeg_player(url,after=state.toggle_next)
+
+        player.download_url = url
+        player.title = realname
+        player.duration = int(track['durationMillis'])
+
+        return player
     @commands.command(pass_context=True, no_pm=True)
     async def volume(self, ctx, value : int):
         """Sets the volume of the currently playing song."""
@@ -241,4 +277,10 @@ async def on_ready():
     print('Logged in as:\n{0} (ID: {0.id})'.format(bot.user))
 
 key = os.environ['MILTON_KEY']
+email = os.environ['MILTON_GOOGLE_EMAIL']
+app_password = os.environ['MILTON_APP_PASSWORD']
+device_id = os.environ['MILTON_DEVICE_ID']
+
+api = Mobileclient()
+logged_in = api.login(email, app_password, device_id)
 bot.run(key)
