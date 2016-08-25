@@ -1,0 +1,10 @@
+before_script:
+	- pkill -f milton.py
+	- cd ~/milton
+	- . ~/milton/venv/bin/activate
+	- pip install -U -r requirements.txt
+
+run:
+	- cd ~/milton
+	- . venv/bin/activate
+	- nohup python milton.py &
