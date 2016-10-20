@@ -4,6 +4,7 @@ import logging
 import functools
 import os
 import youtube_dl
+import pprint
 from gmusicapi import Mobileclient
 from discord.ext import commands
 
@@ -15,7 +16,7 @@ if not discord.opus.is_loaded():
     # note that on windows this DLL is automatically provided for you
     discord.opus.load_opus('opus')
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 
 class VoiceEntry:
     def __init__(self, message, player):
@@ -159,6 +160,94 @@ class Music:
             await self.bot.say('Enqueued ' + str(entry))
             await state.songs.put(entry)
 
+    @commands.command(pass_context=True, no_pm=True)
+    async def radio(self, ctx, *, station_str : str):
+        state = self.get_voice_state(ctx.message.server)
+        if state.voice is None:
+            success = await ctx.invoke(self.summon)
+            if not success:
+                return
+        
+        #search all radio stations
+        loop = state.voice.loop
+        func = functools.partial(api.search, station_str)
+        result = await loop.run_in_executor(None, func)
+        
+        if result["station_hits"] is None:
+            raise Exception("No Station Hits")
+            
+            
+        station_hits = result["station_hits"]
+        station = station_hits[0]["station"]
+        print("picking first station: " + str(station["name"]))
+        
+        pp = pprint.PrettyPrinter(indent=1)
+        pp.pprint(station)
+        
+        #get actualy station from search
+        loop = state.voice.loop
+        func = functools.partial(api.get_all_stations)
+        result = await loop.run_in_executor(None, func)
+        real_station = None
+        for r in result:
+            if r["name"] == station["name"]:
+                real_station = r
+        id = 0
+        if real_station is None:
+            #create the station by curation id
+            seed = station["seed"]
+            func = None
+            if "curationStationId" in seed:
+                func = functools.partial(api.create_station, station["name"], curated_station_id=seed["curationStationId"])
+            elif "songId" in seed:
+                func = functools.partial(api.create_station, station["name"], song_id=seed["songId"])
+            elif "artistId" in seed:
+                func = functools.partial(api.create_station, station["name"], artist_id=seed["artistId"])
+            else:
+                raise Exception("cannot create station")
+            
+            result = await loop.run_in_executor(None, func)
+            id = result
+        else:
+            id = real_station["id"]
+        
+        print("ID: " + str(id))
+                
+        #get 10 tracks from the station
+        loop = state.voice.loop
+        func = functools.partial(api.get_station_tracks, id, num_tracks=10)
+        result = await loop.run_in_executor(None, func)
+        
+        
+        for track in result:
+            try:
+                player = await self.create_gmusic_player_by_id(track, state)
+            except Exception as e:
+                fmt = 'An error occurred while processing this request: ```py\n{}: {}\n```'
+                await self.bot.send_message(ctx.message.channel, fmt.format(type(e).__name__, e))
+            else:
+                player.volume = 0.6
+                entry = VoiceEntry(ctx.message, player)
+                await self.bot.say('Enqueued ' + str(entry))
+                await state.songs.put(entry)
+            
+    async def create_gmusic_player_by_id(self, track, state):
+        loop = state.voice.loop
+        id = track['nid']
+        realname = track['title'] + ' - ' + track['artist']
+        func = functools.partial(api.get_stream_url,id)
+        url = await loop.run_in_executor(None, func)
+        if url is None:
+            raise Exception("error retrieving song url")
+
+        player = state.voice.create_ffmpeg_player(url,after=state.toggle_next)
+
+        player.download_url = url
+        player.title = realname
+        player.duration = int(track['durationMillis'])
+
+        return player
+        
     async def create_gmusic_player(self, song, state):
         loop = state.voice.loop
         func = functools.partial(api.search,song,max_results=2)
@@ -242,21 +331,10 @@ class Music:
         if not state.is_playing():
             await self.bot.say('Not playing any music right now...')
             return
-
-        voter = ctx.message.author
-        if voter == state.current.requester:
-            await self.bot.say('Requester requested skipping song...')
-            state.skip()
-        elif voter.id not in state.skip_votes:
-            state.skip_votes.add(voter.id)
-            total_votes = len(state.skip_votes)
-            if total_votes >= 3:
-                await self.bot.say('Skip vote passed, skipping song...')
-                state.skip()
-            else:
-                await self.bot.say('Skip vote added, currently at [{}/3]'.format(total_votes))
-        else:
-            await self.bot.say('You have already voted to skip this song.')
+            
+        await self.bot.say('Requester requested skipping song...')
+        state.skip()
+        
 
     @commands.command(pass_context=True, no_pm=True)
     async def playing(self, ctx):
@@ -284,3 +362,8 @@ device_id = os.environ['MILTON_DEVICE_ID']
 api = Mobileclient()
 logged_in = api.login(email, app_password, device_id)
 bot.run(key)
+
+#Google music debugging
+
+#pp = pprint.PrettyPrinter(indent=1)
+#pp.pprint(api.get_all_playlists())
