@@ -197,7 +197,7 @@ class Music:
             player.volume = 0.6
             entry = VoiceEntry(ctx.message, player)
             await self.bot.say('Enqueued ' + str(entry))
-            await state.songs.put(entry)
+            await state.play(entry)
             
 
     async def play_id(self, song_id, title, artist, duration):
@@ -218,7 +218,7 @@ class Music:
             entry = VoiceEntry(self.reg_ctx.message, player)
             await self.bot.send_message(ctx.message.channel, 'playing ' + str(entry))
             await state.play(entry)
-
+'''
     @commands.command(pass_context=True, no_pm=True)
     async def radio(self, ctx, *, station_str : str):
         state = self.get_voice_state(ctx.message.server)
@@ -289,7 +289,7 @@ class Music:
                 entry = VoiceEntry(ctx.message, player)
                 await self.bot.say('Enqueued ' + str(entry))
                 await state.songs.put(entry)
-            
+'''            
     async def create_gmusic_player_by_id(self, track, state):
         loop = state.voice.loop
         id = track['nid']
@@ -435,7 +435,6 @@ async def control(request):
 
 app = web.Application()
 app.router.add_route('POST', '/', control)
-#web.run_app(app)
 
 bot = commands.Bot(command_prefix=commands.when_mentioned_or('!'), description='A playlist example for discord.py')
 bot.add_cog(Music(bot))
@@ -459,9 +458,3 @@ port = 8080
 srv = asyncio.get_event_loop().run_until_complete(asyncio.get_event_loop().create_server(handler, host, port))
 bot.run(key)
 
-#Google music debugging
-
-
-#print("\n\n\n\n\n\nDEBUGGING ")
-#pp.pprint(api.search("Stacy's Mom", max_results=2))
-#print(api.get_stream_url("2dead7f0-a638-3fa7-8367-7b9f0df61185"))
