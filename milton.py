@@ -5,8 +5,12 @@ import functools
 import os
 import youtube_dl
 import pprint
+import json
 from gmusicapi import Mobileclient
 from discord.ext import commands
+from aiohttp import web
+
+pp = pprint.PrettyPrinter(indent=1)
 
 if not discord.opus.is_loaded():
     # the 'opus' library here is opus.dll on windows
@@ -36,10 +40,10 @@ class VoiceState:
         self.current = None
         self.voice = None
         self.bot = bot
-        self.play_next_song = asyncio.Event()
-        self.songs = asyncio.Queue()
+        #self.play_next_song = asyncio.Event()
+        #self.songs = asyncio.Queue()
         self.skip_votes = set() # a set of user_ids that voted
-        self.audio_player = self.bot.loop.create_task(self.audio_player_task())
+        #self.audio_player = self.bot.loop.create_task(self.audio_player_task())
 
     def is_playing(self):
         if self.voice is None or self.current is None:
@@ -59,6 +63,15 @@ class VoiceState:
 
     def toggle_next(self):
         self.bot.loop.call_soon_threadsafe(self.play_next_song.set)
+        
+
+    async def play(self, player):
+        if self.is_playing():
+            self.player.stop()
+        self.current = player
+        if self.voice is None:
+            return
+        self.current.player.start()
 
     async def audio_player_task(self):
         while True:
@@ -72,9 +85,15 @@ class Music:
     """Voice related commands.
     Works in multiple servers at once.
     """
+    MODE_MANUAL = 0
+    MODE_FOLLOW = 1
+    
     def __init__(self, bot):
         self.bot = bot
         self.voice_states = {}
+        self.is_reg = False
+        self.reg_ctx = None
+        self.play_mode = Music.MODE_MANUAL
 
     def get_voice_state(self, server):
         state = self.voice_states.get(server.id)
@@ -97,7 +116,27 @@ class Music:
                     self.bot.loop.create_task(state.voice.disconnect())
             except:
                 pass
+    
+    @commands.command(name="register", pass_context=True, no_pm=True)
+    async def register(self, ctx):
+        """Registers the sync functionality."""
+        
+        summoned_channel = ctx.message.author.voice_channel
+        if summoned_channel is None:
+            await self.bot.say('You are not in a voice channel.')
+            return False
 
+        state = self.get_voice_state(ctx.message.server)
+        if state.voice is None:
+            state.voice = await self.bot.join_voice_channel(summoned_channel)
+        else:
+            await state.voice.move_to(summoned_channel)
+        
+        print("someone registred")
+        self.reg_ctx = ctx
+        self.is_reg = True
+        self.play_mode = Music.MODE_FOLLOW
+        
     @commands.command(pass_context=True, no_pm=True)
     async def join(self, ctx, *, channel : discord.Channel):
         """Joins a voice channel."""
@@ -159,6 +198,26 @@ class Music:
             entry = VoiceEntry(ctx.message, player)
             await self.bot.say('Enqueued ' + str(entry))
             await state.songs.put(entry)
+            
+
+    async def play_id(self, song_id, title, artist, duration):
+        if self.play_mode != Music.MODE_FOLLOW or self.reg_ctx is None:
+            return
+        state = self.get_voice_state(self.reg_ctx.message.server)
+        ctx = self.reg_ctx
+        if state.voice is None:
+            success = await ctx.invoke(self.summon)
+            if not success:
+                return
+        try:
+            player = await self.create_gmusic_player_from_desktop(song_id, title, artist, duration, state)
+        except Exception as e:
+            fmt = 'An error occurred while processing this request: ```py\n{}: {}\n```'
+            await self.bot.send_message(ctx.message.channel, fmt.format(type(e).__name__, e))
+        else:
+            entry = VoiceEntry(self.reg_ctx.message, player)
+            await self.bot.send_message(ctx.message.channel, 'playing ' + str(entry))
+            await state.play(entry)
 
     @commands.command(pass_context=True, no_pm=True)
     async def radio(self, ctx, *, station_str : str):
@@ -248,6 +307,22 @@ class Music:
 
         return player
         
+    async def create_gmusic_player_from_desktop(self, song_id, title, artist, duration, state):
+        loop = state.voice.loop
+        realname = title + ' - ' + artist
+        func = functools.partial(api.get_stream_url, song_id)
+        url = await loop.run_in_executor(None, func)
+        if url is None:
+            raise Exception("error retrieving song url")
+
+        player = state.voice.create_ffmpeg_player(url)
+
+        player.download_url = url
+        player.title = realname
+        player.duration = int(duration)
+
+        return player
+        
     async def create_gmusic_player(self, song, state):
         loop = state.voice.loop
         func = functools.partial(api.search,song,max_results=2)
@@ -332,7 +407,7 @@ class Music:
             await self.bot.say('Not playing any music right now...')
             return
             
-        await self.bot.say('Requester requested skipping song...')
+        await self.bot.say('Skipping song...')
         state.skip()
         
 
@@ -346,6 +421,21 @@ class Music:
         else:
             skip_count = len(state.skip_votes)
             await self.bot.say('Now playing {} [skips: {}/3]'.format(state.current, skip_count))
+            
+# webserver part i guess
+async def control(request):
+    t = await request.text()
+    r = json.loads(t)
+    print("we got a request lol: ")
+    music = bot.get_cog("Music")
+    await music.play_id(r["id"], r["title"], r["artist"], r["duration"])
+    
+    pp.pprint(r)
+    return web.Response()
+
+app = web.Application()
+app.router.add_route('POST', '/', control)
+#web.run_app(app)
 
 bot = commands.Bot(command_prefix=commands.when_mentioned_or('!'), description='A playlist example for discord.py')
 bot.add_cog(Music(bot))
@@ -359,11 +449,19 @@ email = os.environ['MILTON_GOOGLE_EMAIL']
 app_password = os.environ['MILTON_APP_PASSWORD']
 device_id = os.environ['MILTON_DEVICE_ID']
 
-api = Mobileclient()
+api = Mobileclient(debug_logging=False)
 logged_in = api.login(email, app_password, device_id)
+
+handler = app.make_handler()
+host = "0.0.0.0"
+port = 8080
+
+srv = asyncio.get_event_loop().run_until_complete(asyncio.get_event_loop().create_server(handler, host, port))
 bot.run(key)
 
 #Google music debugging
 
-#pp = pprint.PrettyPrinter(indent=1)
-#pp.pprint(api.get_all_playlists())
+
+#print("\n\n\n\n\n\nDEBUGGING ")
+#pp.pprint(api.search("Stacy's Mom", max_results=2))
+#print(api.get_stream_url("2dead7f0-a638-3fa7-8367-7b9f0df61185"))
