@@ -68,7 +68,7 @@ async def on_play_state(play_state):
                 b["artist"] = track["artist"]
                 b["duration"] = track["duration"]
                 with aiohttp.ClientSession() as session:
-                    await session.post("http://127.0.0.1:8080", data=json.dumps(b))
+                    await session.post("http://104.131.71.198:8080", data=json.dumps(b))
     else:
         print("SEND STOP PLAY TO SERVER")
             
@@ -128,7 +128,10 @@ async def handler(websocket):
 
 async def startup():
     #await send_queue.put((REQUEST_CONNECT, 0))
-    async with websockets.connect('ws://localhost:5672') as ws:   
-        await handler(ws)
+    try:
+        async with websockets.connect('ws://localhost:5672') as ws:
+            await handler(ws)
+    except:
+        input("can't connect to gmusic desktop client")
         
 asyncio.get_event_loop().run_until_complete(startup())
