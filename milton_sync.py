@@ -20,17 +20,20 @@ send_queue = asyncio.Queue()
 
 #queue
 tracks = {}
-track_lock = asyncio.Lock()
 
 #current track
 current_track = None
-current_track_lock = asyncio.Lock()
+
+play_state = False
+s_track_id = ""
+
+state_lock = asyncio.Lock()
 
 
 pp = pprint.PrettyPrinter(indent=1)
 
 async def build_tracks(queue):
-    with await track_lock:
+    with await state_lock:
         global tracks
         tracks = {}
         for t in queue:
@@ -38,19 +41,27 @@ async def build_tracks(queue):
         print("Track list updated")
 
 async def set_current_track(trk):
-    with await current_track_lock:
+    with await state_lock:
         print("Current track set")
         global current_track
         current_track = trk
-        
-async def on_play_state(play_state):
-    print("on play state "  + str(play_state))
-    if play_state:
-        with await current_track_lock, await track_lock:
-            global current_track
-            global tracks
+    await server_sync()
+    
+async def on_play_state(ps):
+    print("on play state "  + str(ps))
+    global play_state
+    with await state_lock:
+        play_state = ps
+    await server_sync()
+    
+async def server_sync():
+    global current_track
+    global tracks
+    global play_state
+    global s_track_id
+    with await state_lock:
+        if play_state:
             if current_track is not None:
-                pp.pprint(current_track)
                 current_title = current_track["title"]
                 id = "dne"
                 track = None
@@ -60,6 +71,8 @@ async def on_play_state(play_state):
                     id = track["id"]
                 else:
                     raise Exception("Track not in queue")
+                if s_track_id == id:
+                    return
                 print("SEND PLAY " + id + " TO SERVER")
                 b = {}
                 b["id"] = id
@@ -68,10 +81,12 @@ async def on_play_state(play_state):
                 b["artist"] = track["artist"]
                 b["duration"] = track["duration"]
                 with aiohttp.ClientSession() as session:
-                    await session.post("http://104.131.71.198:8080", data=json.dumps(b))
-    else:
-        print("SEND STOP PLAY TO SERVER")
-            
+                    async with session.post("http://104.131.71.198:8080", data=json.dumps(b)) as response:
+                        print("Response: " + str(response))
+                s_track_id = id
+        else:
+            print("TODO: send stop play")
+        
 
 async def consumer(message):
     m = json.loads(message)
@@ -93,6 +108,7 @@ async def consumer(message):
     elif m["channel"] == "playState":
         await on_play_state(m["payload"])
     elif m["channel"] == "queue":
+        print("queue message")
         await build_tracks(m["payload"])
         
         
@@ -128,10 +144,13 @@ async def handler(websocket):
 
 async def startup():
     #await send_queue.put((REQUEST_CONNECT, 0))
-    try:
-        async with websockets.connect('ws://localhost:5672') as ws:
-            await handler(ws)
-    except:
-        input("can't connect to gmusic desktop client")
+    while True:
+        try:
+            async with websockets.connect('ws://localhost:5672') as ws:
+                await handler(ws)
+        except Exception as exp:
+            print("Exception: " + str(exp))
+            if input("Encountered an error, press enter to try again, e to exit\n") == "e":
+                break
         
 asyncio.get_event_loop().run_until_complete(startup())
