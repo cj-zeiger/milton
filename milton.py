@@ -218,7 +218,7 @@ class Music:
             entry = VoiceEntry(self.reg_ctx.message, player)
             await self.bot.send_message(ctx.message.channel, 'playing ' + str(entry))
             await state.play(entry)
-'''
+    '''
     @commands.command(pass_context=True, no_pm=True)
     async def radio(self, ctx, *, station_str : str):
         state = self.get_voice_state(ctx.message.server)
@@ -289,7 +289,7 @@ class Music:
                 entry = VoiceEntry(ctx.message, player)
                 await self.bot.say('Enqueued ' + str(entry))
                 await state.songs.put(entry)
-'''            
+    '''            
     async def create_gmusic_player_by_id(self, track, state):
         loop = state.voice.loop
         id = track['nid']
