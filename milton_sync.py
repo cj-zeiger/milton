@@ -81,6 +81,7 @@ async def server_sync():
                 b["artist"] = track["artist"]
                 b["duration"] = track["duration"]
                 with aiohttp.ClientSession() as session:
+                    #http://104.131.71.198:8080
                     async with session.post("http://104.131.71.198:8080", data=json.dumps(b)) as response:
                         print("Response: " + str(response))
                 s_track_id = id

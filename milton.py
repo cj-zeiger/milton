@@ -1,9 +1,9 @@
+import aiohttp
 import asyncio
 import discord
 import logging
 import functools
 import os
-import youtube_dl
 import pprint
 import json
 from gmusicapi import Mobileclient
@@ -215,98 +215,11 @@ class Music:
             fmt = 'An error occurred while processing this request: ```py\n{}: {}\n```'
             await self.bot.send_message(ctx.message.channel, fmt.format(type(e).__name__, e))
         else:
+            player.volume = 0.6
             entry = VoiceEntry(self.reg_ctx.message, player)
             await self.bot.send_message(ctx.message.channel, 'playing ' + str(entry))
             await state.play(entry)
-    '''
-    @commands.command(pass_context=True, no_pm=True)
-    async def radio(self, ctx, *, station_str : str):
-        state = self.get_voice_state(ctx.message.server)
-        if state.voice is None:
-            success = await ctx.invoke(self.summon)
-            if not success:
-                return
-        
-        #search all radio stations
-        loop = state.voice.loop
-        func = functools.partial(api.search, station_str)
-        result = await loop.run_in_executor(None, func)
-        
-        if result["station_hits"] is None:
-            raise Exception("No Station Hits")
-            
-            
-        station_hits = result["station_hits"]
-        station = station_hits[0]["station"]
-        print("picking first station: " + str(station["name"]))
-        
-        pp = pprint.PrettyPrinter(indent=1)
-        pp.pprint(station)
-        
-        #get actualy station from search
-        loop = state.voice.loop
-        func = functools.partial(api.get_all_stations)
-        result = await loop.run_in_executor(None, func)
-        real_station = None
-        for r in result:
-            if r["name"] == station["name"]:
-                real_station = r
-        id = 0
-        if real_station is None:
-            #create the station by curation id
-            seed = station["seed"]
-            func = None
-            if "curationStationId" in seed:
-                func = functools.partial(api.create_station, station["name"], curated_station_id=seed["curationStationId"])
-            elif "songId" in seed:
-                func = functools.partial(api.create_station, station["name"], song_id=seed["songId"])
-            elif "artistId" in seed:
-                func = functools.partial(api.create_station, station["name"], artist_id=seed["artistId"])
-            else:
-                raise Exception("cannot create station")
-            
-            result = await loop.run_in_executor(None, func)
-            id = result
-        else:
-            id = real_station["id"]
-        
-        print("ID: " + str(id))
-                
-        #get 10 tracks from the station
-        loop = state.voice.loop
-        func = functools.partial(api.get_station_tracks, id, num_tracks=10)
-        result = await loop.run_in_executor(None, func)
-        
-        
-        for track in result:
-            try:
-                player = await self.create_gmusic_player_by_id(track, state)
-            except Exception as e:
-                fmt = 'An error occurred while processing this request: ```py\n{}: {}\n```'
-                await self.bot.send_message(ctx.message.channel, fmt.format(type(e).__name__, e))
-            else:
-                player.volume = 0.6
-                entry = VoiceEntry(ctx.message, player)
-                await self.bot.say('Enqueued ' + str(entry))
-                await state.songs.put(entry)
-    '''            
-    async def create_gmusic_player_by_id(self, track, state):
-        loop = state.voice.loop
-        id = track['nid']
-        realname = track['title'] + ' - ' + track['artist']
-        func = functools.partial(api.get_stream_url,id)
-        url = await loop.run_in_executor(None, func)
-        if url is None:
-            raise Exception("error retrieving song url")
 
-        player = state.voice.create_ffmpeg_player(url,after=state.toggle_next)
-
-        player.download_url = url
-        player.title = realname
-        player.duration = int(track['durationMillis'])
-
-        return player
-        
     async def create_gmusic_player_from_desktop(self, song_id, title, artist, duration, state):
         loop = state.voice.loop
         realname = title + ' - ' + artist
@@ -315,9 +228,7 @@ class Music:
         if url is None:
             raise Exception("error retrieving song url")
 
-        player = state.voice.create_ffmpeg_player(url)
-
-        player.download_url = url
+        player = await self.download_gmusic_song(url, state)
         player.title = realname
         player.duration = int(duration)
 
@@ -332,25 +243,35 @@ class Music:
             raise Exception('Song not found')
         #checking for explicit version
         if (len(result['song_hits']) > 1) and (result['song_hits'][0]['track']['explicitType'] == '2') and (result['song_hits'][1]['track']['explicitType'] == '1') and (result['song_hits'][0]['track']['title'] == result['song_hits'][1]['track']['title']) and (result['song_hits'][0]['track']['albumArtist'] == result['song_hits'][1]['track']['albumArtist']):
-        	#found explicit version
+            #found explicit version
         	track = result['song_hits'][1]['track']
         else:
-        	track = result['song_hits'][0]['track']
+            track = result['song_hits'][0]['track']
 
-        id = track['nid']
+        id = track['storeId']
         realname = track['title'] + ' - ' + track['artist']
         func = functools.partial(api.get_stream_url,id)
         url = await loop.run_in_executor(None, func)
         if url is None:
             raise Exception("error retrieving song url")
 
-        player = state.voice.create_ffmpeg_player(url,after=state.toggle_next)
-
-        player.download_url = url
+        player = await self.download_gmusic_song(url, state)
         player.title = realname
         player.duration = int(track['durationMillis'])
 
         return player
+
+    async def download_gmusic_song(self, url, state):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                with open("temp.mp3", 'wb') as fd:
+                    while True:
+                        chunk = await resp.content.read(1000)
+                        if not chunk:
+                            break
+                        fd.write(chunk)
+        return state.voice.create_ffmpeg_player("temp.mp3")
+
     @commands.command(pass_context=True, no_pm=True)
     async def volume(self, ctx, value : int):
         """Sets the volume of the currently playing song."""
