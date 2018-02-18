@@ -4,8 +4,10 @@ import discord
 import logging
 import functools
 import os
+import sys
 import pprint
 import json
+import time
 from gmusicapi import Mobileclient
 from discord.ext import commands
 from aiohttp import web
@@ -20,7 +22,11 @@ if not discord.opus.is_loaded():
     # note that on windows this DLL is automatically provided for you
     discord.opus.load_opus('opus')
 
-logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger('discord')
+logger.setLevel(logging.DEBUG)
+handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
+logger.addHandler(handler)
 
 class VoiceEntry:
     def __init__(self, message, player):
@@ -100,7 +106,6 @@ class Music:
         if state is None:
             state = VoiceState(self.bot)
             self.voice_states[server.id] = state
-
         return state
 
     async def create_voice_client(self, channel):
@@ -347,7 +352,7 @@ class Music:
 async def control(request):
     t = await request.text()
     r = json.loads(t)
-    print("we got a request lol: ")
+    print("Recv request from sync client: {} - {} - {} - {}".format(r["id"], r["title"], r["artist"], r["duration"]))
     music = bot.get_cog("Music")
     await music.play_id(r["id"], r["title"], r["artist"], r["duration"])
     
@@ -357,10 +362,7 @@ async def control(request):
 app = web.Application()
 app.router.add_route('POST', '/', control)
 
-bot = commands.Bot(command_prefix=commands.when_mentioned_or('!'), description='A playlist example for discord.py')
-bot.add_cog(Music(bot))
 
-@bot.event
 async def on_ready():
     print('Logged in as:\n{0} (ID: {0.id})'.format(bot.user))
 
@@ -372,10 +374,22 @@ device_id = os.environ['MILTON_DEVICE_ID']
 api = Mobileclient(debug_logging=False)
 logged_in = api.login(email, app_password, device_id)
 
-handler = app.make_handler()
+
 host = "0.0.0.0"
 port = 8080
 
-srv = asyncio.get_event_loop().run_until_complete(asyncio.get_event_loop().create_server(handler, host, port))
-bot.run(key)
+while True:
+    try:
+        loop = asyncio.new_event_loop()
+        bot = commands.Bot(loop = loop, command_prefix=commands.when_mentioned_or('!'), description='A playlist example for discord.py')
+        bot.add_listener(on_ready)
+        bot.add_cog(Music(bot))
+        bot.run(key)
+        handler = app.make_handler()
+        loop.run_until_complete(loop.create_server(handler, host, port))
+    except Exception as e:
+        print("Discord bot threw an Exception: " + str(e))
+    finally:
+        loop.close()
+    time.sleep(5)
 
