@@ -359,8 +359,7 @@ async def control(request):
     pp.pprint(r)
     return web.Response()
 
-app = web.Application()
-app.router.add_route('POST', '/', control)
+
 
 
 async def on_ready():
@@ -374,19 +373,26 @@ device_id = os.environ['MILTON_DEVICE_ID']
 api = Mobileclient(debug_logging=False)
 logged_in = api.login(email, app_password, device_id)
 
+def start_webserver(loop):
+    app = web.Application()
+    app.router.add_route('POST', '/', control)
+    handler = app.make_handler()
+    loop.run_until_complete(loop.create_server(handler, host, port))
 
 host = "0.0.0.0"
 port = 8080
 
 while True:
     try:
+        global bot
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         bot = commands.Bot(loop = loop, command_prefix=commands.when_mentioned_or('!'), description='A playlist example for discord.py')
         bot.add_listener(on_ready)
         bot.add_cog(Music(bot))
+        
+        start_webserver(loop)
         bot.run(key)
-        handler = app.make_handler()
-        loop.run_until_complete(loop.create_server(handler, host, port))
     except Exception as e:
         print("Discord bot threw an Exception: " + str(e))
     finally:
