@@ -139,10 +139,10 @@ async def server_controller(command):
 
 async def handler(websocket):
     global session
-    session = aiohttp.ClientSession()
-    while True:
-        message = await websocket.recv()
-        await consumer(message)
+    async with aiohttp.ClientSession() as session:
+        while True:
+            message = await websocket.recv()
+            await consumer(message)
 
 async def startup():
     #await send_queue.put((REQUEST_CONNECT, 0))
